@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+.chroma/
+chroma_db/
+*.egg-info/
+.venv/
+venv/
+.DS_Store
+data/pdfs/
+.uv-cache/
+uv-cache/
