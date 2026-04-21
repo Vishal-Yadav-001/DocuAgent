@@ -42,6 +42,10 @@ DocuAgent/
 ---
 
 ##  Application Flow
+![Application Flow](./assets/flow-diagram.webp)
+
+*Note: If the image above is not showing, you can view the live logic below:*
+
 ```mermaid
 graph TD
     A[Financial PDF/CSV] -->|ingest.py| B(ChromaDB Vector Store)
