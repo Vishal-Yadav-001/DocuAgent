@@ -18,6 +18,7 @@ from crewai import Crew, Process
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from day3_agents.tasks import create_qa_task, create_summary_task, create_mcq_task
+from day2_rag.ingest import load_pdf_text, create_vectorstore
 
 CHROMA_PATH = os.path.join(BASE_DIR, "chroma_db")
 
@@ -38,21 +39,28 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-@st.cache_resource
-def load_retriever():
+def get_retriever():
     if not os.path.exists(CHROMA_PATH):
         return None
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_kwargs={"device": "cpu"}
+    )
     vectorstore = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
     return vectorstore.as_retriever(search_kwargs={"k": 6})
+
+
+# Initialize session state for retriever
+if "retriever" not in st.session_state:
+    st.session_state.retriever = get_retriever()
 
 
 def get_context(retriever, query: str, source_filter: str = None) -> str:
     docs = retriever.invoke(query)
     if source_filter:
-        docs = [d for d in docs if source_filter.lower() in d.metadata.get("source", "").lower()]
-    if not docs:
-        docs = retriever.invoke(query)
+        filtered_docs = [d for d in docs if source_filter.lower() in d.metadata.get("source", "").lower()]
+        if filtered_docs:
+            docs = filtered_docs
     return "\n\n".join(doc.page_content for doc in docs)
 
 
@@ -74,10 +82,46 @@ st.markdown('<p class="main-header"> Financial AI Assistant</p>', unsafe_allow_h
 st.markdown("Powered by **Groq LLaMA 3.3** + **CrewAI Agents** + **RAG Pipeline**")
 st.divider()
 
-retriever = load_retriever()
+# Sidebar for file upload
+with st.sidebar:
+    st.header("Document Management")
+    uploaded_file = st.file_uploader("Upload a PDF document", type=["pdf"])
+    
+    if uploaded_file is not None:
+        if st.button("Process & Ingest"):
+            with st.spinner("Processing document..."):
+                # Save uploaded file to a temporary location
+                temp_dir = os.path.join(BASE_DIR, "temp")
+                os.makedirs(temp_dir, exist_ok=True)
+                temp_path = os.path.join(temp_dir, uploaded_file.name)
+                
+                with open(temp_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                
+                # Load and ingest
+                doc = load_pdf_text(temp_path)
+                if doc:
+                    create_vectorstore([doc], clear_old=False)  # Append to existing
+                    st.session_state.retriever = get_retriever()
+                    st.success(f"Successfully ingested {uploaded_file.name}")
+                else:
+                    st.error("Failed to extract text from PDF.")
+                
+                # Clean up temp file
+                os.remove(temp_path)
+
+    if st.button("Clear Database"):
+        if os.path.exists(CHROMA_PATH):
+            import shutil
+            shutil.rmtree(CHROMA_PATH)
+            st.session_state.retriever = None
+            st.success("Database cleared.")
+            st.rerun()
+
+retriever = st.session_state.retriever
 
 if retriever is None:
-    st.error("ChromaDB not found. Run `python day2_rag/ingest.py` first.")
+    st.info("No documents found in the database. Please upload a PDF file in the sidebar to get started.")
     st.stop()
 
 col1, col2 = st.columns([1, 2])
@@ -105,10 +149,10 @@ with col2:
     st.subheader("Output")
 
     if mode == " Question Answering":
-        question = st.text_input("Your question:", placeholder="e.g. What was HDFC Bank's net profit in Q1 FY26?")
+        question = st.text_input("Your question:", placeholder="e.g. What was the net profit?")
         if st.button("Get Answer", type="primary") and question:
             with st.spinner("QA Agent is thinking..."):
-                context = get_context(retriever, question, source_filter="q1fy26")
+                context = get_context(retriever, question)
                 task = create_qa_task(question, context)
                 answer = run_agent(task)
             st.success("Answer:")
@@ -117,7 +161,7 @@ with col2:
     elif mode == " Summarize Document":
         if st.button("Generate Summary", type="primary"):
             with st.spinner("Summarizer Agent is working..."):
-                context = get_context(retriever, "HDFC Bank revenue profit NII CASA asset quality capital adequacy", source_filter="q1fy26")
+                context = get_context(retriever, "financial highlights revenue profit risks outlook")
                 task = create_summary_task(context)
                 summary = run_agent(task)
             st.success("Executive Summary:")
@@ -127,7 +171,7 @@ with col2:
         num_q = st.slider("Number of MCQs to generate:", min_value=3, max_value=10, value=5)
         if st.button("Generate MCQs", type="primary"):
             with st.spinner(f"MCQ Agent is generating {num_q} questions..."):
-                context = get_context(retriever, "HDFC Bank deposits advances NPA profit capital ratio subsidiaries", source_filter="q1fy26")
+                context = get_context(retriever, "key metrics financial data profit loss balance sheet")
                 task = create_mcq_task(context, num_questions=num_q)
                 mcqs = run_agent(task)
             st.success("Generated MCQs:")

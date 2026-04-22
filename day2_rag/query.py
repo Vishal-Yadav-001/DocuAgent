@@ -31,7 +31,8 @@ def load_retriever():
         sys.exit(1)
 
     embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_kwargs={"device": "cpu"}
     )
     vectorstore = Chroma(
         persist_directory=CHROMA_PATH,

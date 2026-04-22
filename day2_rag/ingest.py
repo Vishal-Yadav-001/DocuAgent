@@ -128,32 +128,38 @@ def ingest_documents():
     if not all_docs:
         print("[ERROR] No documents loaded. Add PDF or CSV files to data/ and retry.")
         sys.exit(1)
-    total_chars = sum(len(d.page_content) for d in all_docs)
-    print(f"\nTotal: {len(all_docs)} pages/documents, {total_chars:,} characters")
+    
+    return create_vectorstore(all_docs)
+
+
+def create_vectorstore(documents: list[Document], clear_old: bool = True):
+    """Chunk documents, embed them, and store in ChromaDB."""
+    total_chars = sum(len(d.page_content) for d in documents)
+    print(f"\nTotal: {len(documents)} pages/documents, {total_chars:,} characters")
 
     print("\n" + "=" * 60)
     print("STEP 2: Chunking text")
     print("=" * 60)
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,  # larger chunks for a big detailed report
-        chunk_overlap=150,  # more overlap so context isn't lost between chunks
+        chunk_size=1000,
+        chunk_overlap=150,
         separators=["\n\n", "\n", ".", " "],
     )
-    chunks = splitter.split_documents(all_docs)
-    print(f"Created {len(chunks)} chunks from {len(all_docs)} pages")
+    chunks = splitter.split_documents(documents)
+    print(f"Created {len(chunks)} chunks from {len(documents)} pages")
 
     print("\n" + "=" * 60)
     print("STEP 3: Loading embedding model")
     print("=" * 60)
-    print("Loading sentence-transformers/all-MiniLM-L6-v2 (cached after first run)...")
     embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_kwargs={"device": "cpu"}
     )
 
     print("\n" + "=" * 60)
     print("STEP 4: Storing in ChromaDB")
     print("=" * 60)
-    if os.path.exists(CHROMA_PATH):
+    if clear_old and os.path.exists(CHROMA_PATH):
         shutil.rmtree(CHROMA_PATH)
         print("Cleared old ChromaDB")
 
@@ -163,13 +169,15 @@ def ingest_documents():
     vectorstore = None
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i: i + batch_size]
-        if vectorstore is None:
+        if vectorstore is None and (clear_old or not os.path.exists(CHROMA_PATH)):
             vectorstore = Chroma.from_documents(
                 documents=batch,
                 embedding=embeddings,
                 persist_directory=CHROMA_PATH,
             )
         else:
+            if vectorstore is None:
+                vectorstore = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
             vectorstore.add_documents(batch)
         print(
             f"  Stored batch {i // batch_size + 1}/{(len(chunks) - 1) // batch_size + 1} "
